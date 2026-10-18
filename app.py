@@ -159,6 +159,9 @@ def create_app(db_path, bug_mode='correct'):
             conn.execute('DELETE FROM sessions WHERE token_id=?', (token_id,))
         return reply(200, '退出成功')
 
+    from ledger import register_ledger_routes
+    register_ledger_routes(app, connect, current_session, reply, body)
+
     return app
 
 

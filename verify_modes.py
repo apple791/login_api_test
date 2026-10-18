@@ -1,17 +1,58 @@
+"""验证原账号81条测试在四种教学模式下的预期结果。"""
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import subprocess,sys,xml.etree.ElementTree as E
-root=Path(__file__).resolve().parent
-expected={'correct':0,'lower_bound':1,'upper_bound':2,'no_auth':1}
-rows=[]
-for mode,failures in expected.items():
-    report=root/'reports'/f'{mode}.xml'
-    cmd=[sys.executable,'-m','pytest','tests','-q','--bug-mode',mode,'--tb=short',f'--junitxml={report}',f'--html=reports/{mode}.html','--self-contained-html']
-    run=subprocess.run(cmd,cwd=root,capture_output=True,text=True,encoding='utf-8',errors='replace')
-    suite=E.parse(report).find('testsuite')
-    actual={k:int(suite.get(k,0)) for k in ['tests','failures','errors','skipped']}
-    print(mode,actual,'exit',run.returncode,flush=True)
-    if actual!={'tests':81,'failures':failures,'errors':0,'skipped':0} or run.returncode!=(1 if failures else 0):
-        print(run.stdout);print(run.stderr);raise SystemExit('Unexpected verification result')
-    failed=[t.get('name') for t in suite.findall('testcase') if t.find('failure') is not None]
-    rows.append(f'| {mode} | {81-failures} | {failures} | '+(', '.join(failed) or '无')+' |')
-(root/'docs'/'验证结果.md').write_text('# 实际验证结果\n\n2026-10-11，本地 Requests 真实 HTTP 测试，每种模式运行同一组81项用例。\n\n| 模式 | 通过 | 失败 | 失败用例 |\n|---|---:|---:|---|\n'+'\n'.join(rows)+'\n\n全部模式均无执行错误或跳过。正确模式退出码0，缺陷模式退出码1，这是预期的缺陷暴露结果；没有使用xfail隐藏失败。\n\nHTML和JUnit结果保存在 reports/对应模式.html 与 .xml。验证覆盖注册、登录、个人信息、修改密码和退出登录。\n\n账号升级新增36项测试，先对旧实现运行观察失败，再实现两个接口并执行完整回归。\n\n验证顺序：先编写边界测试观察未实现应用导致的失败；实现正确服务后验证通过；开启缺陷验证失败；优化非边界用例的基准密码为8位后，重新执行全部模式。当前没有声称已手工修复三个教学缺陷，correct模式是正确实现的基准。\n',encoding='utf-8')
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+
+ROOT = Path(__file__).resolve().parent
+EXPECTED_FAILURES = {'correct': 0, 'lower_bound': 1, 'upper_bound': 2, 'no_auth': 1}
+ACCOUNT_TESTS = ['tests/test_auth.py', 'tests/test_account.py']
+
+
+def main():
+    (ROOT / 'reports').mkdir(exist_ok=True)
+    rows = []
+    for mode, failures in EXPECTED_FAILURES.items():
+        report = ROOT / 'reports' / f'{mode}.xml'
+        command = [
+            sys.executable, '-m', 'pytest', *ACCOUNT_TESTS, '-q',
+            '--bug-mode', mode, '--tb=short', f'--junitxml={report}',
+            f'--html=reports/{mode}.html', '--self-contained-html',
+        ]
+        run = subprocess.run(command, cwd=ROOT, capture_output=True,
+                             text=True, encoding='utf-8', errors='replace')
+        if not report.is_file():
+            print(run.stdout)
+            print(run.stderr)
+            raise SystemExit('未生成JUnit报告，不能确认测试结果')
+        suite = ET.parse(report).find('testsuite')
+        if suite is None:
+            raise SystemExit('JUnit报告缺少testsuite')
+        actual = {key: int(suite.get(key, 0))
+                  for key in ['tests', 'failures', 'errors', 'skipped']}
+        print(mode, actual, 'exit', run.returncode, flush=True)
+        if actual != {'tests': 81, 'failures': failures, 'errors': 0, 'skipped': 0} or run.returncode != (1 if failures else 0):
+            print(run.stdout)
+            print(run.stderr)
+            raise SystemExit('教学模式结果与预期不一致')
+        failed = [case.get('name') for case in suite.findall('testcase')
+                  if case.find('failure') is not None]
+        rows.append(f'| {mode} | {81 - failures} | {failures} | '
+                    + (', '.join(failed) or '无') + ' |')
+    today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+    text = (
+        '# 账号教学模式验证结果\n\n'
+        f'执行日期：{today}（北京时间）。仅覆盖原账号81条测试，不包含账本和SQL核对。'
+        '项目当前全量范围见[当前测试用例](测试用例.md)。\n\n'
+        '| 模式 | 通过 | 预期失败 | 失败用例 |\n'
+        '|---|---:|---:|---|\n' + '\n'.join(rows)
+        + '\n\n全部模式均无执行错误或跳过。正常模式退出码0，教学缺陷模式退出码1；'
+        '没有使用xfail隐藏失败。HTML和JUnit结果保存在reports目录。'
+        '这是主动植入缺陷的验证记录，不表示已手工修复这些缺陷。\n'
+    )
+    (ROOT / 'docs' / '验证结果.md').write_text(text, encoding='utf-8')
+
+
+if __name__ == '__main__':
+    main()
